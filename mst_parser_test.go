@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
@@ -77,6 +78,42 @@ func TestParseProductLinksFromListing(t *testing.T) {
 	if len(links6) != 1 {
 		t.Errorf("Ожидалась 1 валидная ссылка (остальные навигационные), получено %d", len(links6))
 	}
+}
+
+func TestImageFiltering(t *testing.T) {
+	url := "https://www.mstpumps.com/slurry-pumps/energy-efficient-slurry-pump.html"
+	sc := NewScraperClient(1500*time.Millisecond, 4000*time.Millisecond, 5)
+	product, err := ParseProductPage(sc, url)
+	if err != nil {
+		t.Fatalf("Ошибка парсинга: %v", err)
+	}
+
+	t.Logf("Продукт: %s", product.Title)
+	t.Logf("Изображений после фильтрации: %d", len(product.Images))
+
+	// Проверяем, что нет мусорных изображений
+	for _, img := range product.Images {
+		lower := strings.ToLower(img.SmallRemoteURL)
+		for _, pattern := range []string{"share_", "lang", "flag", "erweima", "qrcode", "logo", "banner", "rollpro", "facebook", "twitter"} {
+			if strings.Contains(lower, pattern) {
+				t.Errorf("Мусорное изображение не отфильтровано: %s (содержит '%s')", img.SmallRemoteURL, pattern)
+			}
+		}
+	}
+
+	// Основное фото должно быть
+	found := false
+	for _, img := range product.Images {
+		if strings.Contains(img.SmallRemoteURL, "energy-efficient-slurry-pump") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Основное фото продукта не найдено!")
+	}
+
+	t.Logf("✅ Фильтрация прошла успешно — %d изображений", len(product.Images))
 }
 
 func TestParsePagination(t *testing.T) {

@@ -135,7 +135,11 @@ func ParseProductPage(sc *ScraperClient, productURL string) (*Product, error) {
 
 	fmt.Printf("    Характеристик найдено: %d\n", len(product.Specifications))
 
-	// 4. Изображения
+	// 4. Удаляем мусорные блоки перед сбором изображений
+	//    — похожие товары, кнопки поделиться, QR-коды, баннеры, иконки языка
+	doc.Find(".rollPro1, .rollPro, .tshare, .erweima, .inbanner, .lang-icon").Remove()
+
+	// 5. Изображения — собираем только оставшиеся
 	doc.Find("img").Each(func(i int, img *goquery.Selection) {
 		src, exists := img.Attr("src")
 		if !exists || src == "" {
@@ -225,6 +229,7 @@ func isIconOrLogo(imgURL string) bool {
 		"facebook", "twitter", "linkedin", "youtube", "instagram",
 		"whatsapp", "skype", "email", "search", "cart", "basket",
 		"arrow", "slide", "thumb_",
+		"share_", "lang", "flag", "erweima", "qrcode",
 	}
 	for _, pattern := range skipPatterns {
 		if strings.Contains(lower, pattern) {

@@ -21,9 +21,16 @@ func main() {
 	categoryURL := flag.String("category", "", "URL категории (режим B)")
 	skipImages := flag.Bool("skip-images", false, "Пропустить скачивание изображений")
 	limit := flag.Int("limit", 0, "Лимит продуктов (0 = без лимита)")
+	debugImages := flag.String("debug-images", "", "Показать все изображения с контекстом для указанного URL")
 	flag.Parse()
 
 	rand.Seed(time.Now().UnixNano())
+
+	// Режим debug-images — анализ изображений на странице
+	if *debugImages != "" {
+		analyzePageImages(*debugImages)
+		return
+	}
 
 	fmt.Println("╔══════════════════════════════════════════════╗")
 	fmt.Println("║    MST Pumps Catalog Parser v2.0            ║")
@@ -60,6 +67,185 @@ func main() {
 	default:
 		log.Fatalf("❌ Неизвестный режим: %s. Используйте A или B", *mode)
 	}
+}
+
+// analyzePageImages загружает страницу продукта и выводит все изображения с контекстом
+func analyzePageImages(url string) {
+	fmt.Printf("\n🔍 Анализ изображений на странице:\n%s\n", url)
+	fmt.Println(strings.Repeat("=", 80))
+
+	client := NewScraperClient(1500*time.Millisecond, 4000*time.Millisecond, 5)
+	resp, err := client.Get(url)
+	if err != nil {
+		log.Fatalf("❌ Ошибка загрузки: %v", err)
+	}
+	defer resp.Body.Close()
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		log.Fatalf("❌ Ошибка парсинга: %v", err)
+	}
+
+	fmt.Printf("\n%-4s | %-12s | %-80s | %s\n", "№", "БЛОК", "URL", "КОНТЕКСТ")
+	fmt.Println(strings.Repeat("-", 160))
+
+	idx := 0
+	doc.Find("img").Each(func(i int, img *goquery.Selection) {
+		src, exists := img.Attr("src")
+		if !exists || src == "" {
+			return
+		}
+		idx++
+
+		// Определяем контекст (родительские элементы)
+		imgContext := detectImageContext(img, url)
+
+		// Размеры, если есть
+		width, _ := img.Attr("width")
+		height, _ := img.Attr("height")
+		dims := ""
+		if width != "" && height != "" {
+			dims = fmt.Sprintf(" [%sx%s]", width, height)
+		}
+
+		// alt текст
+		alt, _ := img.Attr("alt")
+		altText := ""
+		if alt != "" {
+			altText = fmt.Sprintf(" alt=\"%s\"", truncate(alt, 40))
+		}
+
+		// Определяем, что это за блок
+		blockType := identifyBlock(img)
+		parentClass := getParentClass(img)
+
+		fmt.Printf("%-4d | %-12s | %-80s | %s%s%s | %s\n",
+			idx, blockType, truncate(src, 80), parentClass, dims, altText, truncate(imgContext, 50))
+	})
+
+	if idx == 0 {
+		fmt.Println("❌ Изображения не найдены")
+	}
+	fmt.Println(strings.Repeat("=", 80))
+	fmt.Printf("\n📊 Всего изображений: %d\n", idx)
+	fmt.Println("\n💡 Легенда блоков:")
+	fmt.Println("  [MAIN]    — основная галерея товара (нужно)")
+	fmt.Println("  [DESC]    — внутри описания товара (нужно, но не всегда)")
+	fmt.Println("  [THUMB]   — миниатюра в галерее (скорее всего дубль)")
+	fmt.Println("  [RELATED] — похожие товары (МУСОР)")
+	fmt.Println("  [ICON]    — иконка/лого/кнопка (МУСОР)")
+	fmt.Println("  [UNKNOWN] — не удалось определить блок")
+}
+
+// identifyBlock определяет тип блока, в котором находится изображение
+func identifyBlock(img *goquery.Selection) string {
+	// Проверяем родительские элементы
+	parents := make([]string, 0)
+	img.Parents().Each(func(i int, s *goquery.Selection) {
+		if class, ok := s.Attr("class"); ok && class != "" {
+			parents = append(parents, class)
+		}
+		if id, ok := s.Attr("id"); ok && id != "" {
+			parents = append(parents, "#"+id)
+		}
+	})
+
+	parentText := strings.Join(parents, " ")
+	parentText = strings.ToLower(parentText)
+
+	// Сначала проверяем на иконки/лого
+	src, _ := img.Attr("src")
+	lowerSrc := strings.ToLower(src)
+	isIcon := false
+	for _, p := range []string{"logo", "icon", "favicon", "facebook", "twitter", "linkedin",
+		"youtube", "instagram", "whatsapp", "skype", "email", "search", "cart", "basket",
+		"arrow", "banner", "arrow", "btn_", "button"} {
+		if strings.Contains(lowerSrc, p) {
+			isIcon = true
+			break
+		}
+	}
+	if isIcon {
+		return "ICON"
+	}
+
+	// Related products
+	if strings.Contains(parentText, "related") ||
+		strings.Contains(parentText, "similar") ||
+		strings.Contains(parentText, "recommend") {
+		return "RELATED"
+	}
+
+	// Галерея / основное изображение
+	if strings.Contains(parentText, "gallery") ||
+		strings.Contains(parentText, "product-img") ||
+		strings.Contains(parentText, "main-image") ||
+		strings.Contains(parentText, "product-image") ||
+		strings.Contains(parentText, "single-product") ||
+		strings.Contains(parentText, "woocommerce-product-gallery") {
+		return "MAIN"
+	}
+
+	// Миниатюры
+	if strings.Contains(parentText, "thumb") ||
+		strings.Contains(lowerSrc, "thumb") {
+		return "THUMB"
+	}
+
+	// Описание / контент
+	if strings.Contains(parentText, "desc") ||
+		strings.Contains(parentText, "content") ||
+		strings.Contains(parentText, "text") ||
+		strings.Contains(parentText, "body") {
+		return "DESC"
+	}
+
+	return "UNKNOWN"
+}
+
+// detectImageContext собирает контекст изображения
+func detectImageContext(img *goquery.Selection, pageURL string) string {
+	parts := make([]string, 0)
+
+	img.Parents().Each(func(i int, s *goquery.Selection) {
+		if i > 3 {
+			return
+		}
+		tag := goquery.NodeName(s)
+		class, _ := s.Attr("class")
+		id, _ := s.Attr("id")
+		ctx := tag
+		if class != "" {
+			ctx += "." + strings.ReplaceAll(strings.Fields(class)[0], " ", ".")
+		}
+		if id != "" {
+			ctx += "#" + id
+		}
+		parts = append(parts, ctx)
+	})
+
+	if len(parts) > 0 {
+		return strings.Join(parts, " > ")
+	}
+	return "-"
+}
+
+// getParentClass возвращает классы ближайшего родителя
+func getParentClass(img *goquery.Selection) string {
+	parent := img.Parent()
+	class, _ := parent.Attr("class")
+	tag := goquery.NodeName(parent)
+	if class != "" {
+		return fmt.Sprintf("%s.%s", tag, strings.Split(class, " ")[0])
+	}
+	return tag
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
 
 // processModeA — пошаговый режим через productlist
@@ -212,7 +398,7 @@ func parseProductsBatch(sc *ScraperClient, downloader *Downloader, allLinks []st
 
 	fmt.Printf("\n📊 Итого спарсено в этом запуске: %d\n", len(newlyParsed))
 	fmt.Printf("📊 Осталось: %d\n", len(allLinks)-len(parsedCache)-len(newlyParsed))
-	fmt.Printf("�� Чтобы продолжить, запусти: --step=products --start=%d --count=%d\n", end, count)
+	fmt.Printf("💡 Чтобы продолжить, запусти: --step=products --start=%d --count=%d\n", end, count)
 }
 
 // fillSpecifications — ШАГ 3: дозаполняет характеристики у уже спарсенных продуктов
