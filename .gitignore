@@ -1,0 +1,27 @@
+# Исполняемые файлы
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Выходные данные парсера
+catalog_structured.json
+modx_import.json
+downloaded_images/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+*.log
+
+# Временные файлы
+tmp/
+temp/
