@@ -14,10 +14,13 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "B", "Режим парсинга: B - по категориям, A - верификация через productlist")
-	categoryURL := flag.String("category", "", "URL конкретной категории для парсинга (опционально)")
+	mode := flag.String("mode", "B", "Режим парсинга: B - по категориям, A - через productlist")
+	step := flag.String("step", "all", "Шаг: links, products, specs, all")
+	startFrom := flag.Int("start", 0, "С какого продукта начинать (для step=products)")
+	count := flag.Int("count", 36, "Сколько продуктов парсить за раз (для step=products)")
+	categoryURL := flag.String("category", "", "URL категории (режим B)")
 	skipImages := flag.Bool("skip-images", false, "Пропустить скачивание изображений")
-	limit := flag.Int("limit", 0, "Ограничить количество продуктов (0 = без лимита)")
+	limit := flag.Int("limit", 0, "Лимит продуктов (0 = без лимита)")
 	flag.Parse()
 
 	rand.Seed(time.Now().UnixNano())
@@ -26,16 +29,18 @@ func main() {
 	fmt.Println("║    MST Pumps Catalog Parser v2.0            ║")
 	fmt.Println("║    Парсер каталога насосов MST Pumps        ║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
-	fmt.Printf("Режим: %s\n", *mode)
+	fmt.Printf("Режим: %s, Шаг: %s\n", *mode, *step)
 	if *skipImages {
 		fmt.Println("Скачивание изображений: отключено")
 	}
 	if *limit > 0 {
 		fmt.Printf("Лимит продуктов: %d\n", *limit)
 	}
+	if *step == "products" {
+		fmt.Printf("Парсинг продуктов: с %d, количество: %d\n", *startFrom, *count)
+	}
 
 	sc := NewScraperClient(1500*time.Millisecond, 4000*time.Millisecond, 5)
-
 	downloader := NewDownloader("downloaded_images")
 	if !*skipImages {
 		if err := downloader.InitDirs(); err != nil {
@@ -43,70 +48,354 @@ func main() {
 		}
 	}
 
-	catalog := &Catalog{}
-
 	switch *mode {
+	case "A":
+		processModeA(sc, downloader, *step, *startFrom, *count, *skipImages, *limit)
 	case "B":
 		if *categoryURL != "" {
-			parseSingleCategory(sc, downloader, catalog, *categoryURL, *skipImages, *limit)
+			parseSingleCategory(sc, downloader, &Catalog{}, *categoryURL, *skipImages, *limit)
 		} else {
-			parseAllCategories(sc, downloader, catalog, *skipImages, *limit)
+			parseAllCategories(sc, downloader, &Catalog{}, *skipImages, *limit)
 		}
-	case "A":
-		fmt.Println("\n=== Режим верификации A: сбор всех продуктов через productlist ===")
-		parseProductList(sc, downloader, catalog, *skipImages, *limit)
 	default:
 		log.Fatalf("❌ Неизвестный режим: %s. Используйте A или B", *mode)
 	}
-
-	if err := SaveCatalog(catalog, "catalog_structured.json"); err != nil {
-		log.Printf("⚠️ Ошибка сохранения каталога: %v", err)
-	}
-	modxProducts := ConvertCatalogToMODXProducts(catalog)
-	if err := SaveMODXImport(modxProducts, "modx_import.json"); err != nil {
-		log.Printf("⚠️ Ошибка сохранения MODX-импорта: %v", err)
-	}
-	PrintSummary(catalog)
-	fmt.Println("\n🎉 Парсинг завершён!")
 }
 
-// -------------------- Парсинг всех категорий (режим B) --------------------
+// processModeA — пошаговый режим через productlist
+func processModeA(sc *ScraperClient, downloader *Downloader, step string, startFrom, count int, skipImages bool, limit int) {
+	const linksCacheFile = "_product_links.json"
+	const productCacheFile = "_product_cache.json"
+
+	fmt.Println("\n=== Режим верификации A: сбор всех продуктов через productlist ===")
+
+	// ----- ШАГ 1: Сбор ссылок -----
+	if step == "all" || step == "links" {
+		allLinks := collectAllLinks(sc, linksCacheFile)
+		fmt.Printf("\n📊 Итого: %d ссылок сохранено в %s\n", len(allLinks), linksCacheFile)
+		if step == "links" {
+			fmt.Println("✅ Шаг 'links' завершён. Для парсинга запусти: --step=products")
+			return
+		}
+	}
+
+	// Загружаем ссылки из кэша
+	allLinks, err := loadLinksCache(linksCacheFile)
+	if err != nil || len(allLinks) == 0 {
+		log.Fatalf("❌ Нет кэша ссылок (%s). Сначала запусти --step=links", linksCacheFile)
+	}
+	fmt.Printf("📦 Загружено %d ссылок из кэша\n", len(allLinks))
+
+	// ----- ШАГ 2: Парсинг продуктов -----
+	if step == "all" || step == "products" {
+		parseProductsBatch(sc, downloader, allLinks, productCacheFile, startFrom, count, skipImages, limit)
+	}
+
+	// ----- ШАГ 3: Дозаполнение характеристик -----
+	if step == "specs" {
+		fillSpecifications(sc)
+	}
+}
+
+// collectAllLinks собирает ссылки со всех 81 страниц productlist
+func collectAllLinks(sc *ScraperClient, cacheFile string) []string {
+	fmt.Println("\n📌 ШАГ 1: Сбор ссылок с productlist (1-81)...")
+	fmt.Println("   Каждая страница: ~12 товаров")
+	fmt.Println("   Всего ожидается: ~963 товара")
+
+	var allLinks []string
+	for page := 1; page <= 81; page++ {
+		var url string
+		if page == 1 {
+			url = "https://www.mstpumps.com/products"
+		} else {
+			url = fmt.Sprintf("https://www.mstpumps.com/productlist-%d", page)
+		}
+		fmt.Printf("Страница %d/81: %s\n", page, url)
+		var links []string
+		for retry := 0; retry < 3; retry++ {
+			if retry > 0 {
+				fmt.Printf("  🔄 Повторная попытка %d...\n", retry+1)
+				sc.RandomDelay()
+				sc.RandomDelay()
+			}
+			resp, err := sc.Get(url)
+			if err != nil {
+				log.Printf("⚠️ Ошибка: %v", err)
+				continue
+			}
+			doc, err := goquery.NewDocumentFromReader(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				log.Printf("⚠️ Ошибка парсинга: %v", err)
+				continue
+			}
+			links = ParseProductLinksFromListing(doc)
+			if len(links) > 0 || retry >= 2 {
+				break
+			}
+			fmt.Printf("  ⚠️ Получено 0 товаров (попытка %d), повторяю...\n", retry+1)
+		}
+		allLinks = append(allLinks, links...)
+		fmt.Printf("  ✅ Найдено: %d (всего: %d)\n", len(links), len(allLinks))
+		if page < 81 {
+			sc.RandomDelay()
+		}
+	}
+	if err := saveLinksCache(allLinks, cacheFile); err != nil {
+		log.Printf("⚠️ Ошибка сохранения кэша: %v", err)
+	}
+	fmt.Printf("💾 Ссылки сохранены: %s (%d шт.)\n", cacheFile, len(allLinks))
+	return allLinks
+}
+
+// parseProductsBatch парсит продукты порциями
+func parseProductsBatch(sc *ScraperClient, downloader *Downloader, allLinks []string, cacheFile string, startFrom, count int, skipImages bool, limit int) {
+	fmt.Println("\n📌 ШАГ 2: Парсинг продуктов")
+	parsedCache, _ := loadProductCache(cacheFile)
+	fmt.Printf("📦 Ранее спарсено: %d продуктов\n", len(parsedCache))
+
+	totalNew := len(allLinks)
+	if limit > 0 && limit < totalNew {
+		totalNew = limit
+	}
+	end := startFrom + count
+	if end > totalNew {
+		end = totalNew
+	}
+	fmt.Printf("📊 Парсинг продуктов %d — %d из %d\n", startFrom+1, end, len(allLinks))
+	if startFrom >= len(allLinks) {
+		fmt.Println("✅ Все продукты уже спарсены!")
+		return
+	}
+
+	products := make([]Product, 0)
+	var newlyParsed []string
+	for i := startFrom; i < end && i < len(allLinks); i++ {
+		link := allLinks[i]
+		if limit > 0 && i >= limit {
+			break
+		}
+		if parsedCache[link] {
+			fmt.Printf("⏭️ [%d/%d] Пропущен (уже есть)\n", i+1, len(allLinks))
+			continue
+		}
+		fmt.Printf("🔍 [%d/%d] %s\n", i+1, len(allLinks), link)
+		product, err := ParseProductPage(sc, link)
+		if err != nil {
+			log.Printf("⚠️ Ошибка: %v", err)
+			continue
+		}
+		if !skipImages {
+			downloader.DownloadProductImages(product)
+		}
+		products = append(products, *product)
+		newlyParsed = append(newlyParsed, link)
+		fmt.Printf("✅ [%d/%d] %s\n", i+1, len(allLinks), product.Title)
+		if i < end-1 {
+			sc.RandomDelay()
+		}
+	}
+
+	if len(newlyParsed) > 0 {
+		allParsed := make([]string, 0, len(parsedCache)+len(newlyParsed))
+		for k := range parsedCache {
+			allParsed = append(allParsed, k)
+		}
+		allParsed = append(allParsed, newlyParsed...)
+		saveProductCache(allParsed, cacheFile)
+		fmt.Printf("💾 Кэш обновлён: %s (%d продуктов)\n", cacheFile, len(allParsed))
+
+		// Сохраняем в catalog
+		mergeProductsToCatalog(products)
+	}
+
+	fmt.Printf("\n📊 Итого спарсено в этом запуске: %d\n", len(newlyParsed))
+	fmt.Printf("📊 Осталось: %d\n", len(allLinks)-len(parsedCache)-len(newlyParsed))
+	fmt.Printf("�� Чтобы продолжить, запусти: --step=products --start=%d --count=%d\n", end, count)
+}
+
+// fillSpecifications — ШАГ 3: дозаполняет характеристики у уже спарсенных продуктов
+func fillSpecifications(sc *ScraperClient) {
+	fmt.Println("\n📌 ШАГ 3: Дозаполнение характеристик")
+
+	// Читаем каталог
+	data, err := os.ReadFile("catalog_structured.json")
+	if err != nil {
+		log.Fatalf("❌ Нет файла catalog_structured.json. Сначала запусти --step=products")
+	}
+	var catalog Catalog
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		log.Fatalf("❌ Ошибка парсинга catalog_structured.json: %v", err)
+	}
+
+	updated := 0
+	skipped := 0
+	for ci := range catalog.Categories {
+		for si := range catalog.Categories[ci].Subcategories {
+			for pi := range catalog.Categories[ci].Subcategories[si].Products {
+				prod := &catalog.Categories[ci].Subcategories[si].Products[pi]
+				// Пропускаем если уже есть характеристики
+				if len(prod.Specifications) > 0 {
+					skipped++
+					continue
+				}
+				// Загружаем страницу и извлекаем только спецификации
+				fmt.Printf("🔍 [%d] %s\n", pi+1, prod.URL)
+				resp, err := sc.Get(prod.URL)
+				if err != nil {
+					log.Printf("⚠️ Ошибка загрузки: %v", err)
+					continue
+				}
+				doc, err := goquery.NewDocumentFromReader(resp.Body)
+				resp.Body.Close()
+				if err != nil {
+					log.Printf("⚠️ Ошибка парсинга HTML: %v", err)
+					continue
+				}
+				// Извлекаем характеристики из <strong>key:</strong> value
+				specs := make(map[string]string)
+				doc.Find("p, div, span, td, li").Each(func(i int, s *goquery.Selection) {
+					s.Find("strong, b").Each(func(j int, strong *goquery.Selection) {
+						text := strings.TrimSpace(strong.Text())
+						if !strings.HasSuffix(text, ":") && !strings.Contains(text, ":") {
+							return
+						}
+						parentHtml, err := strong.Parent().Html()
+						if err != nil {
+							return
+						}
+						cleanKey := strings.TrimRight(strings.TrimSpace(text), ":")
+						strongHtml, err := goquery.OuterHtml(strong)
+						if err != nil {
+							return
+						}
+						parts := strings.SplitN(parentHtml, strongHtml, 2)
+						if len(parts) == 2 {
+							value := strings.TrimSpace(stripHTML(parts[1]))
+							value = strings.TrimRight(value, ".,; ")
+							if cleanKey != "" && value != "" && len(value) < 200 {
+								specs[cleanKey] = value
+							}
+						}
+					})
+				})
+				prod.Specifications = specs
+				fmt.Printf("  ✅ Найдено характеристик: %d\n", len(specs))
+				updated++
+				sc.RandomDelay()
+			}
+		}
+	}
+
+	if updated > 0 {
+		// Сохраняем обновлённый каталог
+		SaveCatalog(&catalog, "catalog_structured.json")
+		modxProducts := ConvertCatalogToMODXProducts(&catalog)
+		SaveMODXImport(modxProducts, "modx_import.json")
+	}
+	fmt.Printf("\n📊 Обновлено: %d, пропущено (уже были): %d\n", updated, skipped)
+	fmt.Println("✅ Шаг 'specs' завершён!")
+}
+
+// mergeProductsToCatalog добавляет новые продукты в существующий каталог
+func mergeProductsToCatalog(products []Product) {
+	if len(products) == 0 {
+		return
+	}
+	existing := &Catalog{}
+	if data, err := os.ReadFile("catalog_structured.json"); err == nil {
+		json.Unmarshal(data, existing)
+	}
+	if len(existing.Categories) > 0 && len(existing.Categories[0].Subcategories) > 0 {
+		existing.Categories[0].Subcategories[0].Products = append(existing.Categories[0].Subcategories[0].Products, products...)
+		SaveCatalog(existing, "catalog_structured.json")
+		SaveMODXImport(ConvertCatalogToMODXProducts(existing), "modx_import.json")
+	} else {
+		cat := &Catalog{Categories: []Category{{Name: "All Products", URL: "https://www.mstpumps.com/products",
+			Subcategories: []Subcategory{{Name: "All Products", URL: "https://www.mstpumps.com/products",
+				Products: products}}}}}
+		SaveCatalog(cat, "catalog_structured.json")
+		SaveMODXImport(ConvertCatalogToMODXProducts(cat), "modx_import.json")
+	}
+}
+
+// -------------------- Кэш-функции --------------------
+
+func loadLinksCache(filePath string) ([]string, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	var links []string
+	if err := json.Unmarshal(data, &links); err != nil {
+		return nil, err
+	}
+	return links, nil
+}
+
+func saveLinksCache(links []string, filePath string) error {
+	data, err := json.MarshalIndent(links, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, data, 0644)
+}
+
+func loadProductCache(filePath string) (map[string]bool, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return make(map[string]bool), nil
+	}
+	var urls []string
+	if err := json.Unmarshal(data, &urls); err != nil {
+		return make(map[string]bool), nil
+	}
+	cache := make(map[string]bool, len(urls))
+	for _, u := range urls {
+		cache[u] = true
+	}
+	return cache, nil
+}
+
+func saveProductCache(urls []string, filePath string) error {
+	data, err := json.MarshalIndent(urls, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filePath, data, 0644)
+}
+
+// -------------------- Режим B (категории) --------------------
 
 func parseAllCategories(sc *ScraperClient, downloader *Downloader, catalog *Catalog, skipImages bool, limit int) {
 	fmt.Println("\n=== Режим B: Парсинг по дереву категорий ===")
 	globalProductCount := 0
-
 	for _, catInfo := range categoryStructure {
 		fmt.Printf("\n📁 Категория: %s (%s)\n", catInfo.Name, catInfo.URL)
 		category := Category{Name: catInfo.Name, URL: catInfo.URL}
-
 		if catInfo.HasChildren {
-			_, err := sc.Get(catInfo.URL)
-			if err != nil {
-				log.Printf("⚠️ Ошибка загрузки категории %s: %v", catInfo.URL, err)
-			}
+			sc.Get(catInfo.URL)
 			subcategories := getPredefinedSubcategories(catInfo.Name)
 			if len(subcategories) == 0 {
 				fmt.Printf("  ⚠️ Нет подкатегорий для %s\n", catInfo.Name)
 				continue
 			}
 			for _, sub := range subcategories {
-				fmt.Printf("\n  �� Подкатегория: %s (%s)\n", sub.Name, sub.URL)
+				fmt.Printf("\n  📂 Подкатегория: %s (%s)\n", sub.Name, sub.URL)
 				links, err := ScrapeSubcategoryLinks(sc, sub.URL)
 				if err != nil {
-					log.Printf("  ⚠️ Ошибка парсинга подкатегории %s: %v", sub.URL, err)
+					log.Printf("  ⚠️ Ошибка: %v", err)
 					continue
 				}
 				fmt.Printf("  Найдено продуктов: %d\n", len(links))
 				var products []Product
 				for i, link := range links {
 					if limit > 0 && globalProductCount >= limit {
-						fmt.Println("  Достигнут лимит продуктов")
 						break
 					}
 					product, err := ParseProductPage(sc, link)
 					if err != nil {
-						log.Printf("  ⚠️ Ошибка парсинга продукта %s: %v", link, err)
 						continue
 					}
 					if !skipImages {
@@ -122,10 +411,8 @@ func parseAllCategories(sc *ScraperClient, downloader *Downloader, catalog *Cata
 				category.Subcategories = append(category.Subcategories, sub)
 			}
 		} else {
-			fmt.Printf("  Категория без подкатегорий, парсинг продуктов напрямую...\n")
 			links, err := ScrapeCategoryLinks(sc, catInfo.URL)
 			if err != nil {
-				log.Printf("  ⚠️ Ошибка парсинга категории %s: %v", catInfo.URL, err)
 				continue
 			}
 			var products []Product
@@ -135,7 +422,6 @@ func parseAllCategories(sc *ScraperClient, downloader *Downloader, catalog *Cata
 				}
 				product, err := ParseProductPage(sc, link)
 				if err != nil {
-					log.Printf("  ⚠️ Ошибка парсинга продукта %s: %v", link, err)
 					continue
 				}
 				if !skipImages {
@@ -158,7 +444,6 @@ func parseSingleCategory(sc *ScraperClient, downloader *Downloader, catalog *Cat
 	catInfo := CategoryInfo{Name: extractCategoryNameFromURL(categoryURL), URL: categoryURL, HasChildren: true}
 	category := Category{Name: catInfo.Name, URL: catInfo.URL}
 	subcategories := getPredefinedSubcategories(catInfo.Name)
-
 	if len(subcategories) == 0 {
 		links, err := ScrapeCategoryLinks(sc, categoryURL)
 		if err != nil {
@@ -209,184 +494,8 @@ func parseSingleCategory(sc *ScraperClient, downloader *Downloader, catalog *Cat
 	catalog.Categories = append(catalog.Categories, category)
 }
 
-// -------------------- Парсинг через productlist (режим A) с кэшом --------------------
-
-// loadLinksCache загружает кэш ссылок из файла
-func loadLinksCache(filePath string) ([]string, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, err
-	}
-	var links []string
-	if err := json.Unmarshal(data, &links); err != nil {
-		return nil, err
-	}
-	return links, nil
-}
-
-// saveLinksCache сохраняет ссылки в кэш
-func saveLinksCache(links []string, filePath string) error {
-	data, err := json.MarshalIndent(links, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filePath, data, 0644)
-}
-
-// loadProductCache загружает уже спарсенные продукты
-func loadProductCache(filePath string) (map[string]bool, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return make(map[string]bool), nil // если файла нет — пустой кэш
-	}
-	var urls []string
-	if err := json.Unmarshal(data, &urls); err != nil {
-		return make(map[string]bool), nil
-	}
-	cache := make(map[string]bool, len(urls))
-	for _, u := range urls {
-		cache[u] = true
-	}
-	return cache, nil
-}
-
-// saveProductCache сохраняет URL спарсенных продуктов
-func saveProductCache(urls []string, filePath string) error {
-	data, err := json.MarshalIndent(urls, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filePath, data, 0644)
-}
-
-func parseProductList(sc *ScraperClient, downloader *Downloader, catalog *Catalog, skipImages bool, limit int) {
-	const linksCacheFile = "_product_links.json"
-	const productCacheFile = "_product_cache.json"
-
-	// 1. Загружаем кэш ссылок на продукты
-	allLinks, err := loadLinksCache(linksCacheFile)
-	if err != nil || len(allLinks) == 0 {
-		fmt.Println("Сбор всех ссылок на продукты с productlist (1-81)...")
-		allLinks = nil
-		for page := 1; page <= 81; page++ {
-			var url string
-			if page == 1 {
-				url = "https://www.mstpumps.com/products"
-			} else {
-				url = fmt.Sprintf("https://www.mstpumps.com/productlist-%d", page)
-			}
-			fmt.Printf("Страница %d/81: %s\n", page, url)
-			var links []string
-			for retry := 0; retry < 3; retry++ {
-				if retry > 0 {
-					fmt.Printf("  🔄 Повторная попытка %d...\n", retry+1)
-					sc.RandomDelay()
-					sc.RandomDelay()
-				}
-				resp, err := sc.Get(url)
-				if err != nil {
-					log.Printf("⚠️ Ошибка: %v", err)
-					continue
-				}
-				doc, err := goquery.NewDocumentFromReader(resp.Body)
-				resp.Body.Close()
-				if err != nil {
-					log.Printf("⚠️ Ошибка парсинга: %v", err)
-					continue
-				}
-				links = ParseProductLinksFromListing(doc)
-				if len(links) > 0 || retry >= 2 {
-					break
-				}
-				fmt.Printf("  ⚠️ Получено 0 товаров (попытка %d), повторяю...\n", retry+1)
-			}
-			allLinks = append(allLinks, links...)
-			fmt.Printf("  Найдено: %d (всего: %d)\n", len(links), len(allLinks))
-			if page < 81 {
-				sc.RandomDelay()
-			}
-		}
-		// Сохраняем кэш ссылок
-		if err := saveLinksCache(allLinks, linksCacheFile); err != nil {
-			log.Printf("⚠️ Ошибка сохранения кэша ссылок: %v", err)
-		} else {
-			fmt.Printf("💾 Ссылки сохранены в кэш: %s (%d ссылок)\n", linksCacheFile, len(allLinks))
-		}
-		fmt.Printf("\nВсего собрано ссылок: %d\n", len(allLinks))
-	} else {
-		fmt.Printf("📦 Загружено %d ссылок из кэша (%s)\n", len(allLinks), linksCacheFile)
-	}
-
-	// 2. Загружаем кэш уже спарсенных продуктов
-	parsedCache, err := loadProductCache(productCacheFile)
-	if err != nil {
-		parsedCache = make(map[string]bool)
-	}
-	fmt.Printf("📦 Ранее спарсено: %d продуктов\n", len(parsedCache))
-
-	// 3. Парсим только НОВЫЕ продукты
-	category := Category{Name: "All Products", URL: "https://www.mstpumps.com/products"}
-	var products []Product
-	var newlyParsed []string
-	doneCount := len(parsedCache)
-
-	for i, link := range allLinks {
-		if limit > 0 && len(products) >= limit {
-			break
-		}
-		// Пропускаем уже спарсенное
-		if parsedCache[link] {
-			// Восстанавливаем продукт из ранее собранного (без повторного парсинга)
-			// Создаём минимальную запись
-			fmt.Printf("⏭️ Продукт %d/%d (пропущен, уже есть в кэше)\n", i+1, len(allLinks))
-			continue
-		}
-
-		product, err := ParseProductPage(sc, link)
-		if err != nil {
-			log.Printf("⚠️ Ошибка: %v", err)
-			continue
-		}
-		if !skipImages {
-			downloader.DownloadProductImages(product)
-		}
-		products = append(products, *product)
-		newlyParsed = append(newlyParsed, link)
-		fmt.Printf("✅ Продукт %d/%d: %s\n", doneCount+len(newlyParsed), len(allLinks), product.Title)
-		if i < len(allLinks)-1 {
-			sc.RandomDelay()
-		}
-
-		// Сохраняем кэш после каждых 10 новых продуктов (на случай прерывания)
-		if len(newlyParsed)%10 == 0 && len(newlyParsed) > 0 {
-			allParsed := make([]string, 0, len(parsedCache)+len(newlyParsed))
-			for k := range parsedCache {
-				allParsed = append(allParsed, k)
-			}
-			allParsed = append(allParsed, newlyParsed...)
-			saveProductCache(allParsed, productCacheFile)
-		}
-	}
-
-	// Сохраняем финальный кэш
-	if len(newlyParsed) > 0 {
-		allParsed := make([]string, 0, len(parsedCache)+len(newlyParsed))
-		for k := range parsedCache {
-			allParsed = append(allParsed, k)
-		}
-		allParsed = append(allParsed, newlyParsed...)
-		saveProductCache(allParsed, productCacheFile)
-		fmt.Printf("💾 Кэш продуктов сохранён: %s (%d продуктов)\n", productCacheFile, len(allParsed))
-	}
-
-	category.Subcategories = append(category.Subcategories, Subcategory{Name: "All Products", URL: "https://www.mstpumps.com/products", Products: products})
-	catalog.Categories = append(catalog.Categories, category)
-}
-
-// -------------------- Подкатегории и утилиты --------------------
-
 func getPredefinedSubcategories(categoryName string) []Subcategory {
-	subcategoryMap := map[string][]Subcategory{
+	m := map[string][]Subcategory{
 		"Slurry Pumps": {
 			{Name: "Heavy Duty Slurry Pump", URL: "https://www.mstpumps.com/slurry-pumps/heavy-duty-slurry-pump/"},
 			{Name: "Sump Slurry Pump", URL: "https://www.mstpumps.com/slurry-pumps/sump-slurry-pump/"},
@@ -427,7 +536,7 @@ func getPredefinedSubcategories(categoryName string) []Subcategory {
 			{Name: "Cast Iron Borehole Pump", URL: "https://www.mstpumps.com/borehole-pump/cast-iron-borehole-pump/"},
 		},
 	}
-	return subcategoryMap[categoryName]
+	return m[categoryName]
 }
 
 func extractCategoryNameFromURL(rawURL string) string {
