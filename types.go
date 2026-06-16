@@ -4,8 +4,10 @@ package main
 type ImageSet struct {
 	SmallRemoteURL string `json:"small_remote_url"`
 	LargeRemoteURL string `json:"large_remote_url"`
-	LocalSmallPath string `json:"local_small_path"`
-	LocalLargePath string `json:"local_large_path"`
+	DestPath       string `json:"dest_path,omitempty"`        // целевой путь для MODX
+	MenuIndex      int    `json:"menuindex,omitempty"`        // порядок в галерее
+	LocalSmallPath string `json:"local_small_path,omitempty"` // оставлено для совместимости
+	LocalLargePath string `json:"local_large_path,omitempty"`
 }
 
 // Product содержит полную информацию о продукте
@@ -16,6 +18,8 @@ type Product struct {
 	Description    string            `json:"description"`
 	Specifications map[string]string `json:"specifications"`
 	Images         []ImageSet        `json:"images"`
+
+	MenuIndex int `json:"menuindex,omitempty"` // порядок в подкатегории
 
 	// Поля для импорта в MODX 3
 	Pagetitle       string `json:"pagetitle"`
@@ -30,15 +34,21 @@ type Product struct {
 
 // Subcategory содержит подкатегорию и её продукты
 type Subcategory struct {
-	Name     string    `json:"subcategory_name"`
-	URL      string    `json:"subcategory_url"`
-	Products []Product `json:"products"`
+	Name      string    `json:"subcategory_name"`
+	URL       string    `json:"subcategory_url"`
+	Slug      string    `json:"slug,omitempty"`      // slug для URL и папки
+	Image     string    `json:"image,omitempty"`     // изображение подкатегории
+	MenuIndex int       `json:"menuindex,omitempty"` // порядок в категории
+	Products  []Product `json:"products"`
 }
 
 // Category содержит категорию с подкатегориями
 type Category struct {
 	Name          string        `json:"category_name"`
 	URL           string        `json:"category_url"`
+	Slug          string        `json:"slug,omitempty"`      // slug для URL и папки
+	Image         string        `json:"image,omitempty"`     // изображение категории
+	MenuIndex     int           `json:"menuindex,omitempty"` // порядок в каталоге
 	Subcategories []Subcategory `json:"subcategories"`
 }
 
@@ -55,12 +65,19 @@ type MODXProduct struct {
 	Parent          int               `json:"parent"`
 	Template        int               `json:"template"`
 	Published       bool              `json:"published"`
+	MenuIndex       int               `json:"menuindex"`
 	ProductImage    string            `json:"product_image"`
 	ProductCategory string            `json:"product_category"`
 	SourceURL       string            `json:"source_url"`
 	Specifications  map[string]string `json:"specifications,omitempty"`
-	LocalSmallPath  string            `json:"local_small_path,omitempty"`
-	LocalLargePath  string            `json:"local_large_path,omitempty"`
+	Images          []MODXImage       `json:"images,omitempty"`
+}
+
+// MODXImage — изображение для MODX с правильным путём
+type MODXImage struct {
+	Src       string `json:"src"`
+	Alt       string `json:"alt,omitempty"`
+	MenuIndex int    `json:"menuindex,omitempty"`
 }
 
 // PageInfo содержит информацию о пагинации
@@ -75,4 +92,26 @@ type CategoryInfo struct {
 	Name        string
 	URL         string
 	HasChildren bool
+}
+
+// slugify конвертирует название в slug для путей
+func slugify(name string) string {
+	result := make([]byte, 0, len(name))
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'A' && c <= 'Z' {
+			result = append(result, c+32) // to lower
+		} else if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' {
+			result = append(result, c)
+		} else if c == ' ' || c == '_' {
+			if len(result) == 0 || result[len(result)-1] != '-' {
+				result = append(result, '-')
+			}
+		}
+	}
+	// remove trailing dash
+	for len(result) > 0 && result[len(result)-1] == '-' {
+		result = result[:len(result)-1]
+	}
+	return string(result)
 }
