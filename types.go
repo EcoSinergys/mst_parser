@@ -17,6 +17,7 @@ type Product struct {
 	URL            string            `json:"url"`
 	Description    string            `json:"description"`
 	Specifications map[string]string `json:"specifications"`
+	TV             ProductTV         `json:"tv"`
 	Images         []ImageSet        `json:"images"`
 
 	MenuIndex int `json:"menuindex,omitempty"` // порядок в подкатегории
@@ -70,7 +71,18 @@ type MODXProduct struct {
 	ProductCategory string            `json:"product_category"`
 	SourceURL       string            `json:"source_url"`
 	Specifications  map[string]string `json:"specifications,omitempty"`
+	TV              map[string]string `json:"tv"`
 	Images          []MODXImage       `json:"images,omitempty"`
+}
+
+// ProductTV содержит TV-параметры MODX Revolution 3 для товара
+type ProductTV struct {
+	Category     string `json:"category"`
+	HeadM        string `json:"head_m"`
+	PowerKW      string `json:"power_kw"`
+	FlowM3H      string `json:"flow_m3h"`
+	WeightKG     string `json:"weight_kg"`
+	MaterialBody string `json:"material_body"`
 }
 
 // MODXImage — изображение для MODX с правильным путём

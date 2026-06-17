@@ -67,12 +67,6 @@ func ConvertToMODXProduct(product *Product) MODXProduct {
 		})
 	}
 
-	// Первое изображение — как основное
-	mainImage := ""
-	if len(modxImages) > 0 {
-		mainImage = modxImages[0].Src
-	}
-
 	return MODXProduct{
 		Pagetitle:       product.Pagetitle,
 		Alias:           product.Alias,
@@ -81,10 +75,11 @@ func ConvertToMODXProduct(product *Product) MODXProduct {
 		Template:        product.Template,
 		Published:       product.Published,
 		MenuIndex:       product.MenuIndex,
-		ProductImage:    mainImage,
+		ProductImage:    product.ProductImage,
 		ProductCategory: product.ProductCategory,
 		SourceURL:       product.SourceURL,
 		Specifications:  product.Specifications,
+		TV:              TVToMap(product.TV),
 		Images:          modxImages,
 	}
 }

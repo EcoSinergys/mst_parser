@@ -494,3 +494,77 @@ func TestCategoryWithMultipleSubcategories(t *testing.T) {
 		t.Errorf("ProductCategory второго = %s, ожидалось 'Sub2'", modxProducts[1].ProductCategory)
 	}
 }
+
+// ==================== ТЕСТЫ TV-ПАРСЕРА ====================
+
+func TestExtractProductTV(t *testing.T) {
+	html := `<html><body>
+		<table>
+			<tr><td>Напор (м):</td><td>50</td></tr>
+			<tr><td>Мощность (кВт):</td><td>15</td></tr>
+			<tr><td>Расход (м³/ч):</td><td>100</td></tr>
+			<tr><td>Вес (кг):</td><td>250</td></tr>
+			<tr><td>Материал корпуса:</td><td>Сталь</td></tr>
+		</table>
+	</body></html>`
+
+	doc, _ := goquery.NewDocumentFromReader(strings.NewReader(html))
+	product := &Product{
+		Title:           "Test Pump",
+		ProductCategory: "Water Pumps",
+		Specifications: map[string]string{
+			"Head":  "50 m",
+			"Power": "15 kW",
+		},
+	}
+
+	tv := ExtractProductTV(doc, product)
+
+	if tv.HeadM != "50" {
+		t.Errorf("HeadM = %q, ожидалось '50'", tv.HeadM)
+	}
+	if tv.PowerKW != "15" {
+		t.Errorf("PowerKW = %q, ожидалось '15'", tv.PowerKW)
+	}
+	if tv.FlowM3H != "100" {
+		t.Errorf("FlowM3H = %q, ожидалось '100'", tv.FlowM3H)
+	}
+	if tv.WeightKG != "250" {
+		t.Errorf("WeightKG = %q, ожидалось '250'", tv.WeightKG)
+	}
+	if tv.MaterialBody != "Сталь" {
+		t.Errorf("MaterialBody = %q, ожидалось 'Сталь'", tv.MaterialBody)
+	}
+}
+
+func TestTVToMap(t *testing.T) {
+	tv := ProductTV{
+		Category:     "Water Pumps",
+		HeadM:        "50",
+		PowerKW:      "15",
+		FlowM3H:      "100",
+		WeightKG:     "250",
+		MaterialBody: "Сталь",
+	}
+
+	m := TVToMap(tv)
+
+	if m["category"] != "Water Pumps" {
+		t.Errorf("category = %q, ожидалось 'Water Pumps'", m["category"])
+	}
+	if m["head_m"] != "50" {
+		t.Errorf("head_m = %q, ожидалось '50'", m["head_m"])
+	}
+	if m["power_kw"] != "15" {
+		t.Errorf("power_kw = %q, ожидалось '15'", m["power_kw"])
+	}
+	if m["flow_m3h"] != "100" {
+		t.Errorf("flow_m3h = %q, ожидалось '100'", m["flow_m3h"])
+	}
+	if m["weight_kg"] != "250" {
+		t.Errorf("weight_kg = %q, ожидалось '250'", m["weight_kg"])
+	}
+	if m["material_body"] != "Сталь" {
+		t.Errorf("material_body = %q, ожидалось 'Сталь'", m["material_body"])
+	}
+}

@@ -135,20 +135,19 @@ func ParseProductPage(sc *ScraperClient, productURL string) (*Product, error) {
 
 	fmt.Printf("    Характеристик найдено: %d\n", len(product.Specifications))
 
-	// 4. Удаляем мусорные блоки перед сбором изображений
-	//    — похожие товары, кнопки поделиться, QR-коды, баннеры, иконки языка
-	doc.Find(".rollPro1, .rollPro, .tshare, .erweima, .inbanner, .lang-icon").Remove()
-
-	// 5. Изображения — собираем только оставшиеся
+	// 4. Изображения — собираем только товарные (фильтр по URL + контексту)
 	doc.Find("img").Each(func(i int, img *goquery.Selection) {
 		src, exists := img.Attr("src")
 		if !exists || src == "" {
 			return
 		}
-		imgURL := resolveURL(productURL, src)
-		if isIconOrLogo(imgURL) {
+
+		// Пропускаем, если изображение не товарное
+		if !IsProductImage(img, productURL) {
 			return
 		}
+
+		imgURL := resolveURL(productURL, src)
 		largeURL := ""
 		if dataZoom, exists := img.Attr("data-zoom-image"); exists && dataZoom != "" {
 			largeURL = resolveURL(productURL, dataZoom)
@@ -174,6 +173,9 @@ func ParseProductPage(sc *ScraperClient, productURL string) (*Product, error) {
 	if product.ProductCategory == "" {
 		product.ProductCategory = extractCategoryFromURL(productURL)
 	}
+
+	// 6. TV-характеристики (должны быть ПОСЛЕ заполнения Specifications)
+	product.TV = ExtractProductTV(doc, product)
 
 	product.SourceURL = productURL
 	product.Template = 5
@@ -203,40 +205,6 @@ func extractGenericDescription(doc *goquery.Document) string {
 		html = html[:50000]
 	}
 	return cleanDescription(html)
-}
-
-// resolveURL преобразует относительный URL в абсолютный
-func resolveURL(baseURL, relativeURL string) string {
-	if strings.HasPrefix(relativeURL, "http") {
-		return relativeURL
-	}
-	base, err := url.Parse(baseURL)
-	if err != nil {
-		return relativeURL
-	}
-	rel, err := url.Parse(relativeURL)
-	if err != nil {
-		return relativeURL
-	}
-	return base.ResolveReference(rel).String()
-}
-
-// isIconOrLogo проверяет, является ли изображение иконкой/логотипом
-func isIconOrLogo(imgURL string) bool {
-	lower := strings.ToLower(imgURL)
-	skipPatterns := []string{
-		"logo", "icon", "favicon", "banner", "button", "btn_",
-		"facebook", "twitter", "linkedin", "youtube", "instagram",
-		"whatsapp", "skype", "email", "search", "cart", "basket",
-		"arrow", "slide", "thumb_",
-		"share_", "lang", "flag", "erweima", "qrcode",
-	}
-	for _, pattern := range skipPatterns {
-		if strings.Contains(lower, pattern) {
-			return true
-		}
-	}
-	return false
 }
 
 // extractCategoryFromBreadcrumbs извлекает название категории из хлебных крошек
