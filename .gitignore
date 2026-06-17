@@ -10,6 +10,21 @@ catalog_structured.json
 modx_import.json
 downloaded_images/
 
+# Временные данные и отчёты парсера
+data/
+
+# Вспомогательные локальные скрипты и их вывод
+scripts/*.py
+scripts/*.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+
 # IDE
 .vscode/
 .idea/
@@ -22,6 +37,6 @@ downloaded_images/
 Thumbs.db
 *.log
 
-# Временные файлы
+# Временные каталоги
 tmp/
 temp/
