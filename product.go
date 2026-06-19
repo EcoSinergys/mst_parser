@@ -166,7 +166,11 @@ func ParseProductPage(sc *ScraperClient, productURL string) (*Product, error) {
 			LargeRemoteURL: largeURL,
 		})
 	})
-	fmt.Printf("    Изображений найдено: %d\n", len(product.Images))
+	// Оставляем только первые 2 изображения (большое + маленькое/миниатюра)
+	if len(product.Images) > 2 {
+		product.Images = product.Images[:2]
+	}
+	fmt.Printf("    Изображений найдено (после обрезки): %d\n", len(product.Images))
 
 	// 5. Категория
 	product.ProductCategory = extractCategoryFromBreadcrumbs(doc, productURL)

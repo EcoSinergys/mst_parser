@@ -21,6 +21,7 @@ func main() {
 	categoryURL := flag.String("category", "", "URL категории (режим B)")
 	limit := flag.Int("limit", 0, "Лимит продуктов (0 = без лимита)")
 	debugImages := flag.String("debug-images", "", "Показать все изображения с контекстом для указанного URL")
+	downloadFlag := flag.Bool("download", false, "Скачать все изображения из catalog_structured.json")
 	flag.Parse()
 
 	rand.Seed(time.Now().UnixNano())
@@ -48,7 +49,13 @@ func main() {
 	if *step == "products" {
 		fmt.Printf("Парсинг продуктов: с %d, количество: %d\n", *startFrom, *count)
 	}
-	fmt.Println("📁 Скачивание изображений: отключено (используйте отдельный загрузчик)")
+	// Режим скачивания изображений
+	if *downloadFlag {
+		downloadAllImages()
+		return
+	}
+
+	fmt.Println("📁 Скачивание изображений: отключено (используйте --download)")
 
 	sc := NewScraperClient(1500*time.Millisecond, 4000*time.Millisecond, 5)
 
@@ -64,6 +71,66 @@ func main() {
 	default:
 		log.Fatalf("❌ Неизвестный режим: %s. Используйте A или B", *mode)
 	}
+}
+
+// downloadAllImages скачивает все изображения из catalog_structured.json
+func downloadAllImages() {
+	fmt.Println("\n�� Загрузка всех изображений из catalog_structured.json...")
+
+	data, err := os.ReadFile("catalog_structured.json")
+	if err != nil {
+		log.Fatalf("❌ Ошибка чтения catalog_structured.json: %v", err)
+	}
+
+	var catalog Catalog
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		log.Fatalf("❌ Ошибка парсинга JSON: %v", err)
+	}
+
+	var jobs []DownloadJob
+	for _, cat := range catalog.Categories {
+		for _, sub := range cat.Subcategories {
+			for _, prod := range sub.Products {
+				for _, img := range prod.Images {
+					srcURL := img.SmallRemoteURL
+					destPath := img.DestPath
+					if srcURL == "" || destPath == "" {
+						continue
+					}
+					// Нормализуем путь — убираем assetsBase, так как DownloadImages сам добавит downloaded_images/
+					destPath = strings.TrimPrefix(destPath, "assets/images/")
+					jobs = append(jobs, DownloadJob{
+						SrcURL:      srcURL,
+						DestPath:    destPath,
+						Category:    cat.Name,
+						Subcategory: sub.Name,
+						Product:     prod.Title,
+					})
+				}
+			}
+		}
+	}
+
+	fmt.Printf("📊 Всего задач на скачивание: %d\n", len(jobs))
+	if len(jobs) == 0 {
+		fmt.Println("❌ Нет изображений для скачивания.")
+		return
+	}
+
+	fmt.Println("🚀 Запуск скачивания (5 потоков)...")
+	fmt.Println()
+	downloaded, skipped, errors := DownloadImages(jobs, 5)
+
+	fmt.Println()
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Println("📊 РЕЗУЛЬТАТЫ СКАЧИВАНИЯ")
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Printf("✅ Скачано:  %d\n", downloaded)
+	fmt.Printf("⏭️  Пропущено (уже есть): %d\n", skipped)
+	fmt.Printf("❌ Ошибок:   %d\n", errors)
+	fmt.Printf("�� Всего:    %d\n", downloaded+skipped+errors)
+	fmt.Println("═══════════════════════════════════════════")
+	fmt.Println("📁 Файлы сохранены в папке: downloaded_images/")
 }
 
 // analyzePageImages загружает страницу продукта и выводит все изображения с контекстом

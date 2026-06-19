@@ -61,8 +61,20 @@ func DownloadImages(jobs []DownloadJob, concurrency int) (downloaded, skipped, e
 					continue
 				}
 
-				// Скачиваем.
-				resp, err := client.Get(job.SrcURL)
+				// Скачиваем с заголовками (Referer, User-Agent)
+				req, err := http.NewRequest("GET", job.SrcURL, nil)
+				if err != nil {
+					mu.Lock()
+					fmt.Printf("  [%d] ❌ %s — %v\n", workerID, job.SrcURL, err)
+					errors++
+					mu.Unlock()
+					continue
+				}
+				req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+				req.Header.Set("Referer", "https://www.mstpumps.com/")
+				req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+				req.Header.Set("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8")
+				resp, err := client.Do(req)
 				if err != nil {
 					mu.Lock()
 					fmt.Printf("  [%d] ❌ %s — %v\n", workerID, job.SrcURL, err)
