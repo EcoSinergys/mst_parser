@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -11,9 +12,16 @@ import (
 // IsProductImage определяет, является ли изображение "товарным" (нужным для каталога).
 // Комбинирует проверку по URL + по контексту в DOM-дереве
 func IsProductImage(img *goquery.Selection, pageURL string) bool {
+	// Try to get src, if empty try data-zoom-image or data-src
 	src, exists := img.Attr("src")
 	if !exists || src == "" {
-		return false
+		if zoom, ok := img.Attr("data-zoom-image"); ok && zoom != "" {
+			src = zoom
+		} else if ds, ok := img.Attr("data-src"); ok && ds != "" {
+			src = ds
+		} else {
+			return false
+		}
 	}
 	imgURL := resolveURL(pageURL, src)
 
@@ -22,7 +30,13 @@ func IsProductImage(img *goquery.Selection, pageURL string) bool {
 		return false
 	}
 
-	// 2. Фильтр по контексту блока
+	// 2. Специальная проверка: если URL изображения содержит slug продукта, считаем его товарным
+	slug := strings.TrimSuffix(strings.ToLower(filepath.Base(pageURL)), ".html")
+	if strings.Contains(strings.ToLower(imgURL), slug) {
+		return true
+	}
+
+	// 3. Фильтр по контексту блока
 	switch identifyBlock(img) {
 	case "MAIN", "DESC":
 		return true

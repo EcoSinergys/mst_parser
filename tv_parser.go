@@ -125,6 +125,11 @@ func findTVValue(raw map[string]string, aliases []string) string {
 		normalizedAlias := normalizeSpecKey(alias)
 		for key, value := range raw {
 			if key == normalizedAlias || strings.Contains(key, normalizedAlias) || strings.Contains(normalizedAlias, key) {
+				// Strip unit suffix (e.g., "50 m" -> "50")
+				value = strings.TrimSpace(value)
+				if strings.Contains(value, " ") {
+					value = strings.Split(value, " ")[0]
+				}
 				return value
 			}
 		}
