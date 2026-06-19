@@ -68,8 +68,10 @@ func main() {
 		} else {
 			parseAllCategories(sc, &Catalog{}, *limit)
 		}
+	case "direct":
+		parseDirectProducts(sc)
 	default:
-		log.Fatalf("❌ Неизвестный режим: %s. Используйте A или B", *mode)
+		log.Fatalf("❌ Неизвестный режим: %s. Используйте A, B или direct", *mode)
 	}
 }
 
