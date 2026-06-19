@@ -25,6 +25,12 @@ func main() {
 
 	rand.Seed(time.Now().UnixNano())
 
+	// Инициализация логгирования
+	if err := InitLogger(); err != nil {
+		fmt.Printf("❌ Ошибка инициализации логгирования: %v\n", err)
+	}
+	defer CloseLogger()
+
 	// Режим debug-images — анализ изображений на странице
 	if *debugImages != "" {
 		analyzePageImages(*debugImages)

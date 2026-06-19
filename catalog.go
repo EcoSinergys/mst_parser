@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net/url"
 	"path"
 	"strings"
@@ -75,8 +74,16 @@ func ParsePagination(doc *goquery.Document) (int, error) {
 
 // GetTotalPagesFromListing определяет количество страниц из текста пагинации
 // Ищет текст "First Prev 1 2 3 ... Next Last X/Y"
+// Возвращает 0, если пагинация не найдена или если на странице слишком мало продуктов
 func GetTotalPagesFromListing(doc *goquery.Document) int {
 	totalPages := 0
+	linksOnPage := len(ParseProductLinksFromListing(doc))
+
+	// Если на странице меньше 5 продуктов — скорее всего пагинации нет
+	if linksOnPage < 5 {
+		LogDebug("Мало продуктов на странице (%d), пагинация не требуется", linksOnPage)
+		return 0
+	}
 
 	// Ищем текст пагинации (может быть в <div> или <span>)
 	doc.Find("div, span, p, td").Each(func(i int, s *goquery.Selection) {
@@ -88,13 +95,19 @@ func GetTotalPagesFromListing(doc *goquery.Document) int {
 				lastPart := strings.TrimSpace(parts[len(parts)-1])
 				var n int
 				if _, err := fmt.Sscanf(lastPart, "%d", &n); err == nil && n > 0 {
-					if n > totalPages {
+					if n > totalPages && n <= 100 {
 						totalPages = n
 					}
 				}
 			}
 		}
 	})
+
+	// Ограничение: не более 20 страниц
+	if totalPages > 20 {
+		LogWarn("Пагинация показала %d страниц, ограничиваем до 20", totalPages)
+		totalPages = 20
+	}
 
 	return totalPages
 }
@@ -252,7 +265,7 @@ func GetAliasFromURL(productURL string) string {
 func ScrapeCategoryLinks(sc *ScraperClient, categoryURL string) ([]string, error) {
 	var allLinks []string
 
-	fmt.Printf("📂 Парсинг категории: %s\n", categoryURL)
+	LogInfo("Парсинг категории: %s", categoryURL)
 
 	// Начинаем с первой страницы
 	resp, err := sc.Get(categoryURL)
@@ -287,26 +300,36 @@ func ScrapeCategoryLinks(sc *ScraperClient, categoryURL string) ([]string, error
 	// Собираем ссылки с остальных страниц
 	for page := 2; page <= totalPages; page++ {
 		pageURL := BuildCategoryURL(categoryURL, page)
-		fmt.Printf("  Страница %d из %d: %s\n", page, totalPages, pageURL)
+		LogInfo("Страница %d из %d: %s", page, totalPages, pageURL)
 
 		sc.RandomDelay()
 
 		resp, err := sc.Get(pageURL)
 		if err != nil {
-			log.Printf("⚠️ Ошибка загрузки страницы %d: %v", page, err)
+			LogWarn("Ошибка загрузки страницы %d: %v", page, err)
+			// Если 404 — прекращаем обход (страницы закончились)
+			if strings.Contains(err.Error(), "404") {
+				LogInfo("Страница %d не найдена (404), прекращаем обход", page)
+				break
+			}
 			continue
 		}
 
 		doc, err := goquery.NewDocumentFromReader(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			log.Printf("⚠️ Ошибка парсинга страницы %d: %v", page, err)
+			LogWarn("Ошибка парсинга страницы %d: %v", page, err)
 			continue
 		}
 
 		links = ParseProductLinksFromListing(doc)
+		// Если на странице нет продуктов — прекращаем
+		if len(links) == 0 {
+			LogInfo("На странице %d нет продуктов, прекращаем обход", page)
+			break
+		}
 		allLinks = append(allLinks, links...)
-		fmt.Printf("  Найдено продуктов на странице %d: %d (всего: %d)\n", page, len(links), len(allLinks))
+		LogInfo("Найдено продуктов на странице %d: %d (всего: %d)", page, len(links), len(allLinks))
 	}
 
 	return allLinks, nil
