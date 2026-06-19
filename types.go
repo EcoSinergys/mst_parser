@@ -70,7 +70,7 @@ type MODXProduct struct {
 	ProductImage    string            `json:"product_image"`
 	ProductCategory string            `json:"product_category"`
 	SourceURL       string            `json:"source_url"`
-	Specifications  map[string]string `json:"specifications,omitempty"`
+	Specifications  string            `json:"specifications,omitempty"`
 	TV              map[string]string `json:"tv"`
 	Images          []MODXImage       `json:"images,omitempty"`
 }

@@ -267,8 +267,8 @@ func TestConvertToMODXProduct(t *testing.T) {
 	if !modxProduct.Published {
 		t.Errorf("Published = false, ожидалось true")
 	}
-	if modxProduct.Specifications["Flow"] != "100 m³/h" {
-		t.Errorf("Specifications['Flow'] = %s, ожидалось '100 m³/h'", modxProduct.Specifications["Flow"])
+	if modxProduct.Specifications != `{"Flow":"100 m³/h","Head":"50 m"}` {
+		t.Errorf("Specifications = %s, ожидалась JSON-строка", modxProduct.Specifications)
 	}
 	if modxProduct.SourceURL != "https://www.mstpumps.com/test-pump.html" {
 		t.Errorf("SourceURL = %s, ожидался оригинальный URL", modxProduct.SourceURL)

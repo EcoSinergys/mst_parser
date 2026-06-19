@@ -55,7 +55,6 @@ func ConvertToMODXProduct(product *Product) MODXProduct {
 	// Генерируем правильные пути для MODX
 	var modxImages []MODXImage
 	for i, img := range product.Images {
-		// Если есть dest_path — используем его, иначе small_remote_url
 		src := img.DestPath
 		if src == "" {
 			src = img.SmallRemoteURL
@@ -67,18 +66,36 @@ func ConvertToMODXProduct(product *Product) MODXProduct {
 		})
 	}
 
+	// Алиас без .html для MODX
+	alias := strings.TrimSuffix(product.Alias, ".html")
+
+	// specifications → JSON-строка для productSpecs TV
+	specsJSON := ""
+	if len(product.Specifications) > 0 {
+		b, err := json.Marshal(product.Specifications)
+		if err == nil {
+			specsJSON = string(b)
+		}
+	}
+
+	// productImage из первого изображения (относительный путь)
+	productImage := product.ProductImage
+	if productImage == "" && len(modxImages) > 0 {
+		productImage = modxImages[0].Src
+	}
+
 	return MODXProduct{
 		Pagetitle:       product.Pagetitle,
-		Alias:           product.Alias,
+		Alias:           alias,
 		Content:         wrapInHTML(product.Description),
 		Parent:          product.Parent,
 		Template:        product.Template,
 		Published:       product.Published,
 		MenuIndex:       product.MenuIndex,
-		ProductImage:    product.ProductImage,
+		ProductImage:    productImage,
 		ProductCategory: product.ProductCategory,
 		SourceURL:       product.SourceURL,
-		Specifications:  product.Specifications,
+		Specifications:  specsJSON,
 		TV:              TVToMap(product.TV),
 		Images:          modxImages,
 	}
