@@ -1,6 +1,7 @@
 package main
 
 import (
+	"compress/gzip"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -110,6 +111,18 @@ func ReadBody(resp *http.Response) ([]byte, error) {
 	return data, nil
 }
 
+// wrapBodyDecompress оборачивает тело ответа для автоматической распаковки gzip
+func wrapBodyDecompress(resp *http.Response) {
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		reader, err := gzip.NewReader(resp.Body)
+		if err == nil {
+			resp.Body = reader
+			resp.Header.Del("Content-Encoding")
+			resp.Header.Del("Content-Length")
+		}
+	}
+}
+
 // Get выполняет HTTP GET с защитой и retry
 func (sc *ScraperClient) Get(url string) (*http.Response, error) {
 	var lastErr error
@@ -138,6 +151,9 @@ func (sc *ScraperClient) Get(url string) (*http.Response, error) {
 			fmt.Printf("⚠️ Ошибка сети: %v\n", err)
 			continue
 		}
+
+		// Автоматическая распаковка gzip
+		wrapBodyDecompress(resp)
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 			fmt.Printf("⚠️ Сервер вернул %d (попытка %d)\n", resp.StatusCode, attempt+1)

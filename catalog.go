@@ -127,27 +127,33 @@ func ParseProductLinksFromListing(doc *goquery.Document) []string {
 		"Product Details", "product details",
 	}
 
+	// Также собираем все ссылки, заканчивающиеся на .html
 	doc.Find("a").Each(func(i int, s *goquery.Selection) {
+		href, exists := s.Attr("href")
+		if !exists || href == "" {
+			return
+		}
+
+		// Проверяем, заканчивается ли ссылка на .html (страница продукта)
+		isHTML := strings.HasSuffix(href, ".html")
+
 		text := strings.TrimSpace(s.Text())
 		cleanedText := strings.Join(strings.Fields(text), " ")
 		lowerText := strings.ToLower(cleanedText)
 
-		// Проверяем по ключевым словам
-		isProductLink := false
-		for _, keyword := range keywords {
-			if strings.EqualFold(cleanedText, keyword) ||
-				strings.Contains(lowerText, strings.ToLower(keyword)) {
-				isProductLink = true
-				break
+		// Проверяем по ключевым словам или по .html
+		isProductLink := isHTML
+		if !isProductLink {
+			for _, keyword := range keywords {
+				if strings.EqualFold(cleanedText, keyword) ||
+					strings.Contains(lowerText, strings.ToLower(keyword)) {
+					isProductLink = true
+					break
+				}
 			}
 		}
 
 		if !isProductLink {
-			return
-		}
-
-		href, exists := s.Attr("href")
-		if !exists || href == "" {
 			return
 		}
 

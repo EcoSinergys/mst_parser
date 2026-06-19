@@ -1,8 +1,31 @@
-Итоги работы:
-- Реализована и протестирована функция IsProductImage в images.go.
-- Исправлены bugs в tv_parser.go.
-- Добавлена новая функциональность в uploader.go.
-- Добавлен новый модуль downloader.go.
-- Выполнены unit‑тесты и проверка синтаксиса.
+Отчёт о тестовом парсинге
 
-Отчёт подготовлен для коммита и пуша.
+Дата: 2026-06-19
+Команда: go run . --mode=B --category="https://www.mstpumps.com/slurry-pumps/heavy-duty-slurry-pump/" --limit=1
+
+Результаты:
+- Парсинг выполнен успешно.
+- Найдено продуктов на странице 1: 12
+- Всего страниц в категории: 9
+- Собрано ссылок на продукты: 107
+- Спарсено продуктов: 1 (лимит = 1)
+
+Информация о спарсенном продукте:
+  Название: High Efficiency Wear Resistant Slurry Pump
+  URL: https://www.mstpumps.com/slurry-pumps/heavy-duty-slurry-pump/high-efficiency-wear-resistant-slurry-pump.html
+  Описание: 13019 символов
+  Изображений найдено: 3
+  TV-характеристик: 1/6 (category)
+
+Созданные файлы:
+- catalog_structured.json (20342 байт)
+- modx_import.json (18451 байт)
+- logs/parser_2026-06-19.log
+
+Исправления, применённые в этой версии:
+1. Файловое логирование (logger.go) — логи пишутся в logs/parser_YYYY-MM-DD.log
+2. Улучшены заголовки запросов, добавлен CookieJar (client.go)
+3. Добавлена распаковка gzip (wrapBodyDecompress)
+4. Улучшен сбор ссылок на продукты (поиск .html + ключевые слова)
+5. Пагинация: ограничение до 20 страниц, break при 404/пустых страницах
+6. Обработка товаров без подкатегорий
